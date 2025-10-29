@@ -7,6 +7,222 @@ from database import TranslationDatabase
 import PyPDF2  # PyPDF2 임포트 추가
 import time
 
+# PDF 뷰어 HTML 생성 함수
+def generate_advanced_pdf_viewer_html(base64_pdf):
+    """PDF.js 기반 고급 PDF 뷰어 HTML 생성 (스크롤로 모든 페이지 보기)"""
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                background-color: #525659;
+            }}
+            #pdf-container {{
+                width: 100%;
+                height: 600px;
+                overflow: auto;
+                padding: 10px 0;
+                scroll-behavior: smooth;
+            }}
+            .page-wrapper {{
+                position: relative;
+                margin: 10px auto;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                background: white;
+            }}
+            canvas {{
+                display: block;
+            }}
+            .controls {{
+                position: sticky;
+                top: 0;
+                background: #323639;
+                padding: 10px;
+                text-align: center;
+                z-index: 100;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            }}
+            .controls button {{
+                background: #0066cc;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                margin: 0 5px;
+                cursor: pointer;
+                border-radius: 4px;
+                font-size: 14px;
+            }}
+            .controls button:hover {{
+                background: #0052a3;
+            }}
+            .controls span {{
+                color: white;
+                margin: 0 10px;
+                font-size: 14px;
+            }}
+            .text-layer {{
+                position: absolute;
+                left: 0;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                overflow: hidden;
+                opacity: 0.2;
+                line-height: 1.0;
+            }}
+            .text-layer > span {{
+                color: transparent;
+                position: absolute;
+                white-space: pre;
+                cursor: text;
+                transform-origin: 0% 0%;
+            }}
+            .text-layer ::selection {{
+                background: rgba(0, 100, 255, 0.3);
+            }}
+            .page-number {{
+                position: absolute;
+                bottom: 5px;
+                right: 10px;
+                background: rgba(50, 54, 57, 0.8);
+                color: white;
+                padding: 5px 10px;
+                border-radius: 3px;
+                font-size: 12px;
+                z-index: 10;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="controls">
+            <button id="zoom-out">축소 (−)</button>
+            <button id="zoom-in">확대 (+)</button>
+            <span id="zoom-level">100%</span>
+            <span id="page-info">총 <span id="page-count">?</span> 페이지</span>
+        </div>
+        <div id="pdf-container"></div>
+        
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+        <script>
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            
+            const pdfData = atob('{base64_pdf}');
+            const pdfContainer = document.getElementById('pdf-container');
+            let pdfDoc = null;
+            let scale = 1.5;
+            let pageRenderers = [];
+            
+            // PDF 로드 및 모든 페이지 렌더링
+            pdfjsLib.getDocument({{data: Uint8Array.from(pdfData, c => c.charCodeAt(0))}}).promise.then(function(pdf) {{
+                pdfDoc = pdf;
+                document.getElementById('page-count').textContent = pdf.numPages;
+                
+                // 모든 페이지 렌더링
+                renderAllPages();
+            }});
+            
+            function renderAllPages() {{
+                pdfContainer.innerHTML = '';
+                pageRenderers = [];
+                
+                for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {{
+                    renderPage(pageNum);
+                }}
+            }}
+            
+            function renderPage(pageNum) {{
+                pdfDoc.getPage(pageNum).then(function(page) {{
+                    const viewport = page.getViewport({{scale: scale}});
+                    
+                    // 페이지 래퍼 생성
+                    const pageWrapper = document.createElement('div');
+                    pageWrapper.className = 'page-wrapper';
+                    pageWrapper.style.width = viewport.width + 'px';
+                    pageWrapper.style.height = viewport.height + 'px';
+                    pageWrapper.setAttribute('data-page-number', pageNum);
+                    
+                    // 캔버스 생성
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    
+                    pageWrapper.appendChild(canvas);
+                    
+                    // 페이지 번호 표시
+                    const pageLabel = document.createElement('div');
+                    pageLabel.className = 'page-number';
+                    pageLabel.textContent = 'Page ' + pageNum;
+                    pageWrapper.appendChild(pageLabel);
+                    
+                    pdfContainer.appendChild(pageWrapper);
+                    
+                    // 페이지 렌더링
+                    const renderContext = {{
+                        canvasContext: context,
+                        viewport: viewport
+                    }};
+                    
+                    const renderTask = page.render(renderContext);
+                    pageRenderers.push(renderTask);
+                    
+                    renderTask.promise.then(function() {{
+                        // 텍스트 레이어 추가 (텍스트 선택/복사 가능)
+                        return page.getTextContent();
+                    }}).then(function(textContent) {{
+                        const textLayerDiv = document.createElement('div');
+                        textLayerDiv.className = 'text-layer';
+                        textLayerDiv.style.width = canvas.width + 'px';
+                        textLayerDiv.style.height = canvas.height + 'px';
+                        pageWrapper.appendChild(textLayerDiv);
+                        
+                        pdfjsLib.renderTextLayer({{
+                            textContent: textContent,
+                            container: textLayerDiv,
+                            viewport: viewport,
+                            textDivs: []
+                        }});
+                    }});
+                }});
+            }}
+            
+            // 확대/축소
+            document.getElementById('zoom-in').addEventListener('click', function() {{
+                scale *= 1.2;
+                document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+                renderAllPages();
+            }});
+            
+            document.getElementById('zoom-out').addEventListener('click', function() {{
+                scale /= 1.2;
+                document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+                renderAllPages();
+            }});
+            
+            // 마우스 휠로 확대/축소 (Ctrl + 휠)
+            pdfContainer.addEventListener('wheel', function(e) {{
+                if (e.ctrlKey || e.metaKey) {{
+                    e.preventDefault();
+                    if (e.deltaY < 0) {{
+                        scale *= 1.1;
+                    }} else {{
+                        scale /= 1.1;
+                    }}
+                    document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+                    renderAllPages();
+                }}
+            }}, {{ passive: false }});
+        </script>
+    </body>
+    </html>
+    """
+
 # 페이지 설정
 st.set_page_config(
     page_title="PDF 번역기",
@@ -74,24 +290,28 @@ with col1:
             # PDF 뷰어 옵션 제공
             view_option = st.radio(
                 "PDF 보기 방식 선택:",
-                ["PDF 뷰어 (권장)", "텍스트 보기", "PDF 뷰어 (HTML iframe)"],
+                ["PDF 뷰어 (고급 - 권장)", "PDF 뷰어 (기본)", "텍스트 보기", "PDF 뷰어 (HTML iframe)"],
                 horizontal=True,
-                index=0 # 기본으로 'PDF 뷰어 (권장)' 선택
+                index=0,  # 기본으로 'PDF 뷰어 (고급 - 권장)' 선택
+                help="고급: 확대/축소, 텍스트 선택/복사 지원 | 기본: Streamlit 기본 뷰어"
             )
             
-            if view_option == "PDF 뷰어 (권장)":
-                # --- 해결 방법 2: Streamlit 기본 st.pdf() 사용 (가장 안정적) ---
-                # st.pdf()는 바이트 데이터를 직접 받습니다.
-                # height 매개변수로 높이를 조절할 수 있습니다.
+            if view_option == "PDF 뷰어 (고급 - 권장)":
+                # --- PDF.js 기반 고급 뷰어 (확대/축소, 텍스트 선택/복사, 스크롤 지원) ---
+                base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+                pdf_viewer_html = generate_advanced_pdf_viewer_html(base64_pdf)
+                
+                st.components.v1.html(pdf_viewer_html, height=680, scrolling=False)
+                st.info("💡 **사용 팁**: 일반 마우스 휠로 스크롤, Ctrl(또는 Cmd) + 마우스 휠로 확대/축소, 텍스트를 드래그하여 선택/복사할 수 있습니다.")
+            
+            elif view_option == "PDF 뷰어 (기본)":
+                # --- Streamlit 기본 st.pdf() 사용 ---
                 st.pdf(pdf_bytes, height=600)
             
             elif view_option == "PDF 뷰어 (HTML iframe)":
-                # --- 해결 방법 1: <embed> 대신 <iframe> 사용 ---
-                
-                # PDF 파일을 base64로 인코딩
+                # --- <iframe> 사용 (브라우저 기본 PDF 뷰어) ---
                 base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
                 
-                # iframe을 사용한 PDF 뷰어 (터치패드 확대/축소 및 마우스 드래그 지원)
                 pdf_container = f"""
                 <div style="
                     height: 600px; 
@@ -136,19 +356,29 @@ with col1:
             # PDF 뷰어 옵션 제공
             view_option = st.radio(
                 "PDF 보기 방식 선택:",
-                ["PDF 뷰어 (권장)", "텍스트 보기", "PDF 뷰어 (HTML iframe)"],
+                ["PDF 뷰어 (고급 - 권장)", "PDF 뷰어 (기본)", "텍스트 보기", "PDF 뷰어 (HTML iframe)"],
                 horizontal=True,
-                index=0 # 기본으로 'PDF 뷰어 (권장)' 선택
+                index=0,  # 기본으로 'PDF 뷰어 (고급 - 권장)' 선택
+                help="고급: 확대/축소, 텍스트 선택/복사 지원 | 기본: Streamlit 기본 뷰어",
+                key="db_pdf_viewer"  # 고유한 키로 충돌 방지
             )
             
-            if view_option == "PDF 뷰어 (권장)":
+            if view_option == "PDF 뷰어 (고급 - 권장)":
+                # --- PDF.js 기반 고급 뷰어 (확대/축소, 텍스트 선택/복사, 스크롤 지원) ---
+                base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+                pdf_viewer_html = generate_advanced_pdf_viewer_html(base64_pdf)
+                
+                st.components.v1.html(pdf_viewer_html, height=680, scrolling=False)
+                st.info("💡 **사용 팁**: 일반 마우스 휠로 스크롤, Ctrl(또는 Cmd) + 마우스 휠로 확대/축소, 텍스트를 드래그하여 선택/복사할 수 있습니다.")
+            
+            elif view_option == "PDF 뷰어 (기본)":
                 st.pdf(pdf_bytes, height=600)
             
             elif view_option == "PDF 뷰어 (HTML iframe)":
                 # PDF 파일을 base64로 인코딩
                 base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
                 
-                # iframe을 사용한 PDF 뷰어 (터치패드 확대/축소 및 마우스 드래그 지원)
+                # iframe을 사용한 PDF 뷰어
                 pdf_container = f"""
                 <div style="
                     height: 600px; 
